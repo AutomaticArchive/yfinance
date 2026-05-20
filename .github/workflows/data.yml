@@ -1,0 +1,60 @@
+name: Process Data
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  process-data:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: project-code
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        with:
+          path: '.'
+
+      - name: Mask Sensitive Tokens and Environment Setup
+        working-directory: .
+        run: |
+          echo "::add-mask::${{ secrets.MIRROR_URL }}"
+          echo "::add-mask::${{ secrets.STOCKS_API_URL }}"
+          echo "::add-mask::${{ secrets.HF_DATASET_NAME }}"
+          echo "::add-mask::${{ secrets.HF_TOKEN }}"
+
+      - name: Clone Project
+        working-directory: .
+        run: |
+          git clone "${{ secrets.MIRROR_URL }}" project-code
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
+        with:
+          enable-cache: true
+
+      - name: Install Dependencies
+        run: uv sync --quiet  > /dev/null 2>&1
+
+      - name: Download from Hugging Face
+        run: uv run -m src.hf_download /tmp/hf-output.json > /dev/null 2>&1
+        env:
+          STOCKS_API_URL: ${{ secrets.STOCKS_API_URL }}
+          HF_DATASET_NAME: ${{ secrets.HF_DATASET_NAME }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      - name: Run Check
+        run: uv run -m src.market_check /tmp/hf-output.json /tmp/market-output.json > /dev/null 2>&1
+
+      - name: Download Data
+        run: uv run -m src.yf_download /tmp/market-output.json /tmp/market-data.parquet > /dev/null 2>&1
+
+      - name: Upload Dataset
+        run: uv run -m src.hf_upload /tmp/market-data.parquet > /dev/null 2>&1
+        env:
+          HF_DATASET_NAME: ${{ secrets.HF_DATASET_NAME }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
