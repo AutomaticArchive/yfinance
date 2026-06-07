@@ -1,0 +1,77 @@
+name: Update Dependencies
+
+on:
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: project-code
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: '.'
+
+      - name: Clear Logs
+        working-directory: .
+        run: rm -f /tmp/workflow.log
+
+      - name: Clone Project
+        working-directory: .
+        env:
+          UPDATE_MIRROR_URL: ${{ secrets.UPDATE_MIRROR_URL }}
+        run: git clone "$UPDATE_MIRROR_URL" project-code >> /tmp/workflow.log 2>&1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Upgrade Lockfile
+        run: uv lock --upgrade >> /tmp/workflow.log 2>&1
+
+      - name: Install Dependencies
+        run: uv sync >> /tmp/workflow.log 2>&1
+
+      - name: Run tests
+        run: uv run pytest tests/ >> /tmp/workflow.log 2>&1
+
+      - name: Commit updated lockfile
+        run: |
+          {
+            git add uv.lock
+
+            if ! git diff --staged --quiet; then
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+              git commit -m "chore: update dependencies"
+              git push
+            fi
+          } >> /tmp/workflow.log 2>&1
+
+      - name: Upload Logs
+        if: always()
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          {
+            HTTP_STATUS=$(
+              curl -s -o /dev/null -w "%{http_code}" \
+                -F "files=@/tmp/workflow.log" \
+                -F "payload_json={\"content\": \"**$WORKFLOW_NAME** Log Upload for Run ID: $RUN_ID\"}" \
+                "$WEBHOOK_URL"
+            )
+          } > /dev/null 2>&1
+
+          if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 204 ]; then
+            echo "Logs uploaded successfully"
+          else
+            echo "Failed to upload logs (HTTP Status: $HTTP_STATUS)"
+          fi
