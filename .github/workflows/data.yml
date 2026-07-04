@@ -1,0 +1,85 @@
+name: Process Data
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  process-data:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: project-code
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          path: '.'
+
+      - name: Clear Logs
+        working-directory: .
+        run: rm -f /tmp/workflow.log
+
+      - name: Clone Project
+        working-directory: .
+        env:
+          MIRROR_URL: ${{ secrets.MIRROR_URL }}
+        run: |
+          git clone "$MIRROR_URL" project-code >> /tmp/workflow.log 2>&1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install Dependencies
+        run: uv sync --locked --quiet > /dev/null 2>&1
+
+      - name: Fetch Data
+        id: fetch-data
+        env:
+          STOCKS_API_URL: ${{ secrets.STOCKS_API_URL }}
+        run: |
+          JSON_DATA=$(curl -s -f "$STOCKS_API_URL" 2>/tmp/workflow.log) || exit 1
+
+          echo "$JSON_DATA" | jq -r '.[]' | while read -r item; do
+            [ -n "$item" ] && echo "::add-mask::$item"
+          done
+
+          FLAT_LIST=$(echo "$JSON_DATA" | jq -r 'join(",")')
+
+          echo "SYMBOLS=$FLAT_LIST" >> $GITHUB_OUTPUT
+
+      - name: Run Script
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_ID: ${{ secrets.HF_DATASET_ID }}
+          SYMBOLS: ${{ steps.fetch-data.outputs.SYMBOLS }}
+        run: uv run python src/main.py >> /tmp/workflow.log 2>&1
+
+      - name: Upload Logs
+        if: always()
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          {
+            HTTP_STATUS=$(
+              curl -s -o /dev/null -w "%{http_code}" \
+                -F "files=@/tmp/workflow.log" \
+                -F "payload_json={\"content\": \"**$WORKFLOW_NAME** Log Upload for Run ID: $RUN_ID\"}" \
+                "$WEBHOOK_URL"
+            )
+          } > /dev/null 2>&1
+
+          if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 204 ]; then
+            echo "Logs uploaded successfully"
+          else
+            echo "Failed to upload logs (HTTP Status: $HTTP_STATUS)"
+          fi
