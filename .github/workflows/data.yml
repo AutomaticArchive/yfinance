@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: '.'
 
@@ -31,27 +31,12 @@ jobs:
           git clone "$MIRROR_URL" project-code >> /tmp/workflow.log 2>&1
 
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
 
       - name: Install Dependencies
         run: uv sync --locked --quiet > /dev/null 2>&1
-
-      - name: Fetch Data
-        id: fetch-data
-        env:
-          STOCKS_API_URL: ${{ secrets.STOCKS_API_URL }}
-        run: |
-          JSON_DATA=$(curl -s -f "$STOCKS_API_URL" 2>/tmp/workflow.log) || exit 1
-
-          echo "$JSON_DATA" | jq -r '.[]' | while read -r item; do
-            [ -n "$item" ] && echo "::add-mask::$item"
-          done
-
-          FLAT_LIST=$(echo "$JSON_DATA" | jq -r 'join(",")')
-
-          echo "SYMBOLS=$FLAT_LIST" >> $GITHUB_OUTPUT
 
       - name: Run Script
         env:
@@ -59,8 +44,8 @@ jobs:
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_DATASET_ID: ${{ secrets.HF_DATASET_ID }}
-          SYMBOLS: ${{ steps.fetch-data.outputs.SYMBOLS }}
-        run: uv run python src/main.py >> /tmp/workflow.log 2>&1
+          STOCKS_API_URL: ${{ secrets.STOCKS_API_URL }}
+        run: uv run main >> /tmp/workflow.log 2>&1
 
       - name: Upload Logs
         if: always()
